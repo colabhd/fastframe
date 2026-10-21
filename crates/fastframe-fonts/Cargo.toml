@@ -19,6 +19,8 @@ default = ["inter"]
 inter = []
 
 [dependencies]
+# std's clock panics in a browser; this one is std's elsewhere.
+web-time = "1"
 egui.workspace = true
 # Reads installed fonts' names, character maps and metrics. The parser
 # epaint 0.36 already rasterizes with, at its version, so no second copy.

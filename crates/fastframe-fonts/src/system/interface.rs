@@ -18,7 +18,8 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use skrifa::MetadataProvider as _;
 
@@ -65,7 +66,7 @@ impl Interface {
 pub(crate) fn interface() -> Option<&'static Interface> {
     static FACE: OnceLock<Option<Interface>> = OnceLock::new();
     FACE.get_or_init(|| {
-        let started = std::time::Instant::now();
+        let started = web_time::Instant::now();
         let found = resolve();
         match &found {
             Some(interface) => log::info!(

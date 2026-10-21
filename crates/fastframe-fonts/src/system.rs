@@ -379,7 +379,7 @@ mod scan {
     /// Finds the best face for each script and reads the files they live in.
     pub(crate) fn scan() -> Vec<Found> {
         let han = han_region(&locale());
-        let started = std::time::Instant::now();
+        let started = web_time::Instant::now();
         let mut best: BTreeMap<&'static str, Candidate> = BTreeMap::new();
         for dir in super::font_directories() {
             probe_dir(&dir, 0, han, &mut best);

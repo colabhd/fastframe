@@ -102,7 +102,7 @@ impl EmojiSetup {
     /// Finds and opens the fonts this setup names, now.
     #[must_use]
     pub fn load(&self) -> Emoji {
-        let started = std::time::Instant::now();
+        let started = web_time::Instant::now();
         let mut sources = Vec::new();
         if self.system {
             #[cfg(windows)]

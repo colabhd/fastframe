@@ -13,6 +13,8 @@ keywords = ["egui", "emoji", "fonts", "colour", "text"]
 categories = ["gui"]
 
 [dependencies]
+# std's clock panics in a browser; this one is std's elsewhere.
+web-time = "1"
 egui.workspace = true
 # Reads the emoji fonts' bitmap strikes and metrics. The parser epaint 0.36
 # already uses, at its version.

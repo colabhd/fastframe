@@ -11,7 +11,10 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use egui::text::LayoutJob;
-use egui::{Color32, ColorImage, Pos2, Rect, Stroke, TextFormat, TextureHandle, TextureOptions};
+use egui::{
+    Color32, ColorImage, Pos2, Rect, Stroke, TextFormat, TextureHandle, TextureId, TextureOptions,
+    Vec2,
+};
 
 use crate::segment::{Piece, pieces};
 use crate::{Picture, available, get};
@@ -28,18 +31,81 @@ const TEXTURE_HEIGHT: u32 = 72;
 /// it.
 const EMOJI_SIDE: f32 = 1.08;
 
+/// Each atlas page's side, in pixels: room for about 180 of Noto's
+/// pictures, four megabytes of texture.
+const PAGE_SIDE: usize = 1024;
+
+/// Transparent pixels between pictures on a page, so filtering at one
+/// picture's edge never reaches the next.
+const GAP: usize = 2;
+
+/// Where a cluster's picture is painted from: its atlas page, its place
+/// there, and its size in pixels.
+///
+/// Pictures share pages so that emoji painted one after another share a
+/// texture too, and egui draws them in one call: the emoji picker drew
+/// each of its hundreds separately, between the text around them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Sprite {
+    pub(crate) id: TextureId,
+    pub(crate) uv: Rect,
+    pub(crate) size: Vec2,
+}
+
+impl Sprite {
+    /// A picture filling its own texture.
+    #[cfg(test)]
+    pub(crate) fn whole(id: TextureId, size: Vec2) -> Self {
+        Self {
+            id,
+            uv: Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+            size,
+        }
+    }
+}
+
+/// One atlas texture, filled a shelf at a time, left to right.
+struct Page {
+    texture: TextureHandle,
+    /// Where the next picture goes, and how tall the shelf it is on is.
+    x: usize,
+    y: usize,
+    shelf: usize,
+}
+
+impl Page {
+    /// Room for a picture of `width` by `height`: where it goes, or `None`
+    /// when the page is full.
+    fn place(&mut self, width: usize, height: usize) -> Option<[usize; 2]> {
+        if self.x + width > PAGE_SIDE {
+            self.y += self.shelf + GAP;
+            self.x = 0;
+            self.shelf = 0;
+        }
+        if self.x + width > PAGE_SIDE || self.y + height > PAGE_SIDE {
+            return None;
+        }
+        let at = [self.x, self.y];
+        self.x += width + GAP;
+        self.shelf = self.shelf.max(height);
+        Some(at)
+    }
+}
+
 /// Pictures uploaded to one egui context, and those on their way.
 #[derive(Clone, Default)]
 struct Cache(Arc<Mutex<Textures>>);
 
 #[derive(Default)]
 struct Textures {
-    /// A texture per cluster, or `None` when no font draws it.
-    ready: HashMap<String, Option<TextureHandle>>,
+    /// A picture per cluster, or `None` when no font draws it.
+    ready: HashMap<String, Option<Sprite>>,
     /// Clusters queued to the worker.
     pending: HashSet<String>,
     /// Pictures the worker finished, to upload in the next frame.
     arrived: Vec<(String, Option<Picture>)>,
+    /// The atlas pages, the last one being filled.
+    pages: Vec<Page>,
 }
 
 impl Cache {
@@ -88,30 +154,67 @@ fn worker() -> Option<&'static Mutex<mpsc::Sender<Job>>> {
         .as_ref()
 }
 
-fn upload(ctx: &egui::Context, cluster: &str, picture: Option<Picture>) -> Option<TextureHandle> {
+/// Copies a picture into the atlas, on a new page when the last is full.
+fn upload(
+    ctx: &egui::Context,
+    textures: &mut Textures,
+    picture: Option<Picture>,
+) -> Option<Sprite> {
     let picture = picture?;
+    let [width, height] = picture.size;
+    if width == 0 || height == 0 || width > PAGE_SIDE || height > PAGE_SIDE {
+        return None;
+    }
+    let place = textures
+        .pages
+        .last_mut()
+        .and_then(|page| page.place(width, height));
+    let at = match place {
+        Some(at) => at,
+        None => {
+            let blank = ColorImage::filled([PAGE_SIDE, PAGE_SIDE], Color32::TRANSPARENT);
+            let name = format!("emoji-atlas-{}", textures.pages.len());
+            let mut page = Page {
+                texture: ctx.load_texture(name, blank, TextureOptions::LINEAR),
+                x: 0,
+                y: 0,
+                shelf: 0,
+            };
+            let at = page.place(width, height)?;
+            textures.pages.push(page);
+            at
+        }
+    };
+    let page = textures.pages.last_mut()?;
     let image = ColorImage::from_rgba_premultiplied(picture.size, &picture.rgba);
-    Some(ctx.load_texture(format!("emoji-{cluster}"), image, TextureOptions::LINEAR))
+    page.texture.set_partial(at, image, TextureOptions::LINEAR);
+    let side = PAGE_SIDE as f32;
+    let min = Pos2::new(at[0] as f32 / side, at[1] as f32 / side);
+    Some(Sprite {
+        id: page.texture.id(),
+        uv: Rect::from_min_size(min, Vec2::new(width as f32 / side, height as f32 / side)),
+        size: Vec2::new(width as f32, height as f32),
+    })
 }
 
-/// The cluster's texture: `Some(Some)` ready, `Some(None)` no font draws
+/// The cluster's picture: `Some(Some)` ready, `Some(None)` no font draws
 /// it, `None` on its way.
-pub(crate) fn texture(ctx: &egui::Context, cluster: &str) -> Option<Option<TextureHandle>> {
+pub(crate) fn texture(ctx: &egui::Context, cluster: &str) -> Option<Option<Sprite>> {
     let cache = Cache::of(ctx);
     let mut textures = cache.lock();
     for (arrived, picture) in std::mem::take(&mut textures.arrived) {
         textures.pending.remove(&arrived);
-        let handle = upload(ctx, &arrived, picture);
-        textures.ready.insert(arrived, handle);
+        let sprite = upload(ctx, &mut textures, picture);
+        textures.ready.insert(arrived, sprite);
     }
     if let Some(known) = textures.ready.get(cluster) {
-        return Some(known.clone());
+        return Some(*known);
     }
     let emoji = get();
     if emoji.synchronous {
-        let handle = upload(ctx, cluster, emoji.render(cluster, TEXTURE_HEIGHT));
-        textures.ready.insert(cluster.to_owned(), handle.clone());
-        return Some(handle);
+        let sprite = upload(ctx, &mut textures, emoji.render(cluster, TEXTURE_HEIGHT));
+        textures.ready.insert(cluster.to_owned(), sprite);
+        return Some(sprite);
     }
     queue(ctx, &cache, &mut textures, cluster);
     None
@@ -223,14 +326,8 @@ pub fn append(
 pub fn paint_cluster(ui: &egui::Ui, cluster: &str, rect: Rect) {
     let painter = ui.painter();
     match texture(ui.ctx(), cluster) {
-        Some(Some(texture)) => {
-            let image_rect = fit(rect, texture.size_vec2());
-            painter.image(
-                texture.id(),
-                image_rect,
-                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                Color32::WHITE,
-            );
+        Some(Some(sprite)) => {
+            painter.image(sprite.id, fit(rect, sprite.size), sprite.uv, Color32::WHITE);
         }
         Some(None) => {
             painter.text(
@@ -400,6 +497,38 @@ mod tests {
             .any(|delta| delta.image.height() == TEXTURE_HEIGHT as usize);
         assert!(uploaded, "the picture was uploaded in the first frame");
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn pictures_share_atlas_pages_until_one_is_full() {
+        let ctx = egui::Context::default();
+        let mut textures = Textures::default();
+        let noto = || {
+            Some(Picture {
+                size: [77, 72],
+                rgba: vec![255; 77 * 72 * 4],
+            })
+        };
+        let first = upload(&ctx, &mut textures, noto()).expect("placed");
+        let second = upload(&ctx, &mut textures, noto()).expect("placed");
+        assert_eq!(first.id, second.id, "painted one after another in one call");
+        assert!(
+            !first
+                .uv
+                .intersects(second.uv.expand(0.5 / PAGE_SIDE as f32))
+        );
+        assert_eq!(first.size, egui::vec2(77.0, 72.0));
+        let per_shelf = (PAGE_SIDE + GAP) / (77 + GAP);
+        let shelves = (PAGE_SIDE + GAP) / (72 + GAP);
+        for _ in 2..per_shelf * shelves {
+            let placed = upload(&ctx, &mut textures, noto()).expect("placed");
+            assert_eq!(placed.id, first.id);
+            assert!(placed.uv.max.x <= 1.0 && placed.uv.max.y <= 1.0);
+        }
+        let next = upload(&ctx, &mut textures, noto()).expect("on a new page");
+        assert_ne!(next.id, first.id);
+        assert_eq!(textures.pages.len(), 2);
+        assert!(upload(&ctx, &mut textures, None).is_none());
     }
 
     #[test]

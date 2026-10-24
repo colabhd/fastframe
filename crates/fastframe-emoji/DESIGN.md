@@ -107,7 +107,11 @@ flags, so they come from the bundled font.
 - Finding and mapping the fonts happens once per process, in `warm_up`,
   which the app runs on a thread of its own at startup (ZapFast already
   does). The 190 MB Apple font and the 10 MB Noto are mapped, never read.
-- A cluster's picture is made once per egui context and kept as a texture.
+- A cluster's picture is made once per egui context and kept in an atlas:
+  1024-pixel pages filled shelf by shelf, two transparent pixels between
+  pictures so filtering never reaches a neighbour. Emoji painted one after
+  another share a page, and egui draws a run of them in one call; a texture
+  each made the picker issue a draw call per emoji.
   `paint_cluster` never draws a new picture on the interface thread: a
   missing picture is queued to one worker thread, the placeholder stays
   transparent for that frame, and the worker asks for a repaint when the
@@ -265,4 +269,4 @@ Copying and selection work on the galley's real text, which the plugin
 never changes. An app that keeps `append` (ZapFast's transcript, whose
 selection maps placeholders back through `placements`) keeps working
 beside the plugin. Scale factor: rectangles are in points and pictures are
-72-pixel textures scaled on the GPU, as with `paint_cluster`.
+72-pixel pictures on the atlas scaled on the GPU, as with `paint_cluster`.

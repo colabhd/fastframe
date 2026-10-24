@@ -108,8 +108,10 @@ flags, so they come from the bundled font.
   which the app runs on a thread of its own at startup (ZapFast already
   does). The 190 MB Apple font and the 10 MB Noto are mapped, never read.
 - A cluster's picture is made once per egui context and kept in an atlas:
-  1024-pixel pages filled shelf by shelf, two transparent pixels between
-  pictures so filtering never reaches a neighbour. Emoji painted one after
+  pages 1024 pixels wide filled shelf by shelf, two transparent pixels
+  between pictures so filtering never reaches a neighbour. The first page is
+  256 pixels tall (one megabyte, a screen's worth of emoji) and each later
+  one twice as tall, up to 1024, since a page is uploaded whole when made. Emoji painted one after
   another share a page, and egui draws a run of them in one call; a texture
   each made the picker issue a draw call per emoji.
   `paint_cluster` never draws a new picture on the interface thread: a

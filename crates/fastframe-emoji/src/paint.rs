@@ -31,9 +31,16 @@ const TEXTURE_HEIGHT: u32 = 72;
 /// it.
 const EMOJI_SIDE: f32 = 1.08;
 
-/// Each atlas page's side, in pixels: room for about 180 of Noto's
-/// pictures, four megabytes of texture.
+/// Each atlas page's width, and the most a page grows to: room for 156 of
+/// Noto's pictures, four megabytes of texture.
 const PAGE_SIDE: usize = 1024;
+
+/// The first page's height: three shelves, 36 of Noto's pictures, one
+/// megabyte, enough for the emoji of most screens. Each later page is twice
+/// as tall as the one before, up to [`PAGE_SIDE`]. A page is uploaded whole
+/// when it is made, so a full-size first page cost four megabytes of the
+/// window's memory for the few emoji a chat shows.
+const FIRST_PAGE_HEIGHT: usize = 256;
 
 /// Transparent pixels between pictures on a page, so filtering at one
 /// picture's edge never reaches the next.
@@ -64,9 +71,11 @@ impl Sprite {
     }
 }
 
-/// One atlas texture, filled a shelf at a time, left to right.
+/// One atlas texture, [`PAGE_SIDE`] wide, filled a shelf at a time, left to
+/// right.
 struct Page {
     texture: TextureHandle,
+    height: usize,
     /// Where the next picture goes, and how tall the shelf it is on is.
     x: usize,
     y: usize,
@@ -82,7 +91,7 @@ impl Page {
             self.x = 0;
             self.shelf = 0;
         }
-        if self.x + width > PAGE_SIDE || self.y + height > PAGE_SIDE {
+        if self.x + width > PAGE_SIDE || self.y + height > self.height {
             return None;
         }
         let at = [self.x, self.y];
@@ -172,10 +181,13 @@ fn upload(
     let at = match place {
         Some(at) => at,
         None => {
-            let blank = ColorImage::filled([PAGE_SIDE, PAGE_SIDE], Color32::TRANSPARENT);
+            let grown = FIRST_PAGE_HEIGHT << textures.pages.len().min(2);
+            let page_height = grown.max(height.next_power_of_two()).min(PAGE_SIDE);
+            let blank = ColorImage::filled([PAGE_SIDE, page_height], Color32::TRANSPARENT);
             let name = format!("emoji-atlas-{}", textures.pages.len());
             let mut page = Page {
                 texture: ctx.load_texture(name, blank, TextureOptions::LINEAR),
+                height: page_height,
                 x: 0,
                 y: 0,
                 shelf: 0,
@@ -188,11 +200,11 @@ fn upload(
     let page = textures.pages.last_mut()?;
     let image = ColorImage::from_rgba_premultiplied(picture.size, &picture.rgba);
     page.texture.set_partial(at, image, TextureOptions::LINEAR);
-    let side = PAGE_SIDE as f32;
-    let min = Pos2::new(at[0] as f32 / side, at[1] as f32 / side);
+    let (across, down) = (PAGE_SIDE as f32, page.height as f32);
+    let min = Pos2::new(at[0] as f32 / across, at[1] as f32 / down);
     Some(Sprite {
         id: page.texture.id(),
-        uv: Rect::from_min_size(min, Vec2::new(width as f32 / side, height as f32 / side)),
+        uv: Rect::from_min_size(min, Vec2::new(width as f32 / across, height as f32 / down)),
         size: Vec2::new(width as f32, height as f32),
     })
 }
@@ -512,6 +524,10 @@ mod tests {
         let first = upload(&ctx, &mut textures, noto()).expect("placed");
         let second = upload(&ctx, &mut textures, noto()).expect("placed");
         assert_eq!(first.id, second.id, "painted one after another in one call");
+        assert_eq!(
+            textures.pages[0].height, FIRST_PAGE_HEIGHT,
+            "a small first page"
+        );
         assert!(
             !first
                 .uv
@@ -519,7 +535,7 @@ mod tests {
         );
         assert_eq!(first.size, egui::vec2(77.0, 72.0));
         let per_shelf = (PAGE_SIDE + GAP) / (77 + GAP);
-        let shelves = (PAGE_SIDE + GAP) / (72 + GAP);
+        let shelves = (FIRST_PAGE_HEIGHT + GAP) / (72 + GAP);
         for _ in 2..per_shelf * shelves {
             let placed = upload(&ctx, &mut textures, noto()).expect("placed");
             assert_eq!(placed.id, first.id);
@@ -528,6 +544,20 @@ mod tests {
         let next = upload(&ctx, &mut textures, noto()).expect("on a new page");
         assert_ne!(next.id, first.id);
         assert_eq!(textures.pages.len(), 2);
+        assert_eq!(
+            textures.pages[1].height,
+            FIRST_PAGE_HEIGHT * 2,
+            "each twice as tall"
+        );
+        // A page grows no taller than it is wide.
+        for _ in 0..2000 {
+            upload(&ctx, &mut textures, noto()).expect("placed");
+        }
+        assert!(textures.pages.iter().all(|page| page.height <= PAGE_SIDE));
+        assert_eq!(
+            textures.pages.last().map(|page| page.height),
+            Some(PAGE_SIDE)
+        );
         assert!(upload(&ctx, &mut textures, None).is_none());
     }
 

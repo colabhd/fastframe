@@ -339,9 +339,23 @@ fn with_app<A, T>(slot: &RefCell<Option<A>>, f: impl FnOnce(&mut A) -> T) -> Opt
 }
 
 /// The right to take the app into one window. See [`Shell::run`].
+///
+/// A clone is the same right, for an app creator that may be made more than
+/// once because a window failed before it ran, as
+/// `fastframe_graphics::Graphics::run_native` does when it tries another
+/// renderer. Only one of them can [`take`](Lease::take) the app.
 pub struct Lease<A> {
     slot: Rc<RefCell<Option<A>>>,
     waker: Waker,
+}
+
+impl<A> Clone for Lease<A> {
+    fn clone(&self) -> Self {
+        Self {
+            slot: Rc::clone(&self.slot),
+            waker: self.waker.clone(),
+        }
+    }
 }
 
 impl<A> Lease<A> {
@@ -366,7 +380,8 @@ impl<A> Lease<A> {
     ///
     /// # Panics
     ///
-    /// If the app is already held elsewhere, which [`Shell`] never allows.
+    /// If the app is already held elsewhere: [`Shell`] never allows it, but
+    /// a second clone of the lease taking it while the first holds it does.
     pub fn take(self, ctx: &egui::Context) -> Held<A> {
         self.waker.attach(ctx);
         let app = self

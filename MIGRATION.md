@@ -1122,6 +1122,28 @@ portable, so nothing moves for installed copies or on Linux and macOS.
 
 Spotifast is the first app on it.
 
+## fastframe-graphics
+
+Every app opens its window with `eframe::run_native` and glow, and on a
+computer without OpenGL 2 every one of them quit without a word. An app
+moving onto `fastframe-graphics` replaces that call:
+
+- `eframe::run_native(NAME, options, Box::new(creator))` becomes
+  `Graphics::new(NAME).help(URL).run_native(|| options(), || Box::new(creator))`.
+  Both arguments are functions now, called once per try; clone into the
+  creator what it captures (an `Arc`, a fastframe-shell `Lease`).
+- Pick the help page: an article saying to install the graphics card's
+  driver, and what the app needs. Solco's is the first.
+- Choose the `wgpu` feature or not. With it, a Windows computer without a
+  vendor driver draws through WARP instead of showing the dialog, at about
+  7 MB more binary and slow, CPU-drawn frames there. Enabling it only for
+  `cfg(windows)` keeps the Linux and macOS builds as they were.
+- Code that reads `cc.gl` or paints with glow callbacks keeps working under
+  glow; under wgpu it receives `None` and must not assume a GL context.
+- An error report tag naming the renderer reads `fastframe_graphics::renderer()`.
+
+Solco is the first app on it.
+
 ## fastframe-audio 0.14
 
 0.14 names the app and its streams in the system's volume mixer

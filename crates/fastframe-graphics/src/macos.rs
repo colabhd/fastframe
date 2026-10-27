@@ -7,9 +7,9 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSString, NSURL};
 
-use crate::Message;
+use crate::Dialog;
 
-pub(crate) fn show(message: &Message) -> bool {
+pub(crate) fn show(message: &Dialog) -> bool {
     let Some(main_thread) = MainThreadMarker::new() else {
         log::warn!("the error dialog can only be shown from the main thread");
         return false;
@@ -23,11 +23,11 @@ pub(crate) fn show(message: &Message) -> bool {
     alert.setAlertStyle(NSAlertStyle::Critical);
     alert.setMessageText(&NSString::from_str(&message.title));
     alert.setInformativeText(&NSString::from_str(&message.body));
-    if message.asks_for_help {
-        alert.addButtonWithTitle(&NSString::from_str("Open Help"));
-        alert.addButtonWithTitle(&NSString::from_str("Close"));
+    if message.link.is_some() {
+        alert.addButtonWithTitle(&NSString::from_str(&message.open_label));
+        alert.addButtonWithTitle(&NSString::from_str(&message.close_label));
     }
-    alert.runModal() == NSAlertFirstButtonReturn && message.asks_for_help
+    alert.runModal() == NSAlertFirstButtonReturn && message.link.is_some()
 }
 
 pub(crate) fn open_url(url: &str) {

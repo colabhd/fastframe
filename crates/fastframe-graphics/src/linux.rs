@@ -3,13 +3,14 @@
 
 use std::process::{Command, Stdio};
 
-use crate::Message;
+use crate::Dialog;
 
-pub(crate) fn show(message: &Message) -> bool {
-    let zenity = if message.asks_for_help {
+pub(crate) fn show(message: &Dialog) -> bool {
+    let zenity = if message.link.is_some() {
         Command::new("zenity")
             .args(["--question", "--icon=dialog-error", "--width=440"])
-            .args(["--ok-label=Open help", "--cancel-label=Close"])
+            .arg(format!("--ok-label={}", message.open_label))
+            .arg(format!("--cancel-label={}", message.close_label))
             .arg(format!("--title={}", message.title))
             .arg(format!("--text={}", escape_markup(&message.body)))
             .stdin(Stdio::null())
@@ -24,9 +25,9 @@ pub(crate) fn show(message: &Message) -> bool {
     };
     if let Ok(status) = zenity {
         // zenity exits 0 for the first button, 1 for the other or a close.
-        return status.success() && message.asks_for_help;
+        return status.success() && message.link.is_some();
     }
-    let kind = if message.asks_for_help {
+    let kind = if message.link.is_some() {
         "--warningyesno"
     } else {
         "--error"
@@ -39,7 +40,7 @@ pub(crate) fn show(message: &Message) -> bool {
         .stdin(Stdio::null())
         .status()
     {
-        Ok(status) => status.success() && message.asks_for_help,
+        Ok(status) => status.success() && message.link.is_some(),
         Err(_) => {
             log::warn!("neither zenity nor kdialog is installed to show the error");
             false

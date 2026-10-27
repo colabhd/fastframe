@@ -1134,6 +1134,20 @@ moving onto `fastframe-graphics` replaces that call:
   creator what it captures (an `Arc`, a fastframe-shell `Lease`).
 - Pick the help page: an article saying to install the graphics card's
   driver, and what the app needs. Solco's is the first.
+- An app with translations passes `.dialog(|trouble| ..)` (0.15.1), returning
+  a `Dialog` in the person's language for each `Cause`. Windows on ARM gets
+  the compatibility pack's Store page built in; keep it with
+  `..Dialog::english(trouble)`.
+
+### Spotifast
+
+Spotifast's own dialog (`report_missing_opengl` in `src/window.rs`, called
+from `src/entrypoint.rs` when `run_native` fails) moves here: its two
+messages become the `.dialog` closure's, translated as now, and its ARM
+check (`cfg!(target_arch = "aarch64")`) becomes `Cause::WindowsOnArm`,
+which also covers its x64 build running emulated on ARM. Spotifast leaves
+the `wgpu` feature off, since MilkDrop draws with glow, so the dialog shows
+whenever OpenGL cannot draw, as it does today.
 - Choose the `wgpu` feature or not. With it, a Windows computer without a
   vendor driver draws through WARP instead of showing the dialog, at about
   7 MB more binary and slow, CPU-drawn frames there. Enabling it only for

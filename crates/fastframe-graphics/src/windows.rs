@@ -9,16 +9,16 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     IDYES, MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MB_YESNO, MessageBoxW, SW_SHOWNORMAL,
 };
 
-use crate::Message;
+use crate::Dialog;
 
 fn wide(text: &str) -> Vec<u16> {
     OsStr::new(text).encode_wide().chain(Some(0)).collect()
 }
 
-pub(crate) fn show(message: &Message) -> bool {
+pub(crate) fn show(message: &Dialog) -> bool {
     let title = wide(&message.title);
     let body = wide(&message.body);
-    let buttons = if message.asks_for_help {
+    let buttons = if message.link.is_some() {
         MB_YESNO
     } else {
         MB_OK
@@ -34,6 +34,24 @@ pub(crate) fn show(message: &Message) -> bool {
         )
     };
     answer == IDYES
+}
+
+/// Whether Windows runs on an ARM64 processor, whatever this build's
+/// architecture: an x64 app runs there emulated.
+pub(crate) fn native_arm64() -> bool {
+    use windows_sys::Win32::System::SystemInformation::{
+        IMAGE_FILE_MACHINE, IMAGE_FILE_MACHINE_ARM64,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, IsWow64Process2};
+    let mut process: IMAGE_FILE_MACHINE = 0;
+    let mut native: IMAGE_FILE_MACHINE = 0;
+    // SAFETY: the pseudo-handle of this process and two writable u16s.
+    let known = unsafe { IsWow64Process2(GetCurrentProcess(), &mut process, &mut native) } != 0;
+    if known {
+        native == IMAGE_FILE_MACHINE_ARM64
+    } else {
+        cfg!(target_arch = "aarch64")
+    }
 }
 
 pub(crate) fn open_url(url: &str) {

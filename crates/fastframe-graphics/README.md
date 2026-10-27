@@ -43,7 +43,50 @@ Later windows in the same process use the renderer that worked, and
 The dialog is a message box on Windows (`MessageBoxW`, which needs no window,
 console or driver), an `NSAlert` on macOS, and zenity or kdialog on Linux,
 whichever is installed. `Graphics::explain` shows it on its own, for an app
-that opens its window another way.
+that opens its window another way, such as one that cannot draw with wgpu.
+
+## Windows on ARM
+
+Snapdragon graphics drivers have no OpenGL of their own. Windows on ARM gets
+it from Microsoft's OpenCL, OpenGL & Vulkan Compatibility Pack, a Store app
+that translates it to Direct3D 12, so there the dialog offers that pack's
+Microsoft Store page (`COMPATIBILITY_PACK_PAGE`) instead of telling people to
+install a driver. `Cause::here()` asks Windows for its processor at run
+time (`IsWow64Process2`), so an x64 build running emulated on ARM gets the
+same remedy. This came from Spotifast's own dialog.
+
+## The dialog in the app's words
+
+`Dialog::english` is fastframe's text. An app with translations, or another
+remedy or link, gives its own:
+
+```rust
+Graphics::new("Spotifast")
+    .help("https://spotifast.rocks/download/")
+    .dialog(move |trouble| {
+        let english = fastframe_graphics::Dialog::english(trouble);
+        match trouble.cause {
+            fastframe_graphics::Cause::WindowsOnArm => fastframe_graphics::Dialog {
+                title: tr(locale, "Spotifast cannot open its window"),
+                body: tr(locale, "On Windows on ARM, … Open its Microsoft Store page to install or repair it?"),
+                ..english // keeps the Store link
+            },
+            _ => fastframe_graphics::Dialog {
+                title: tr(locale, "Spotifast cannot open its window"),
+                body: tr(locale, "Spotifast needs a graphics driver … Open {url} to read more?")
+                    .replace("{url}", trouble.help_url.unwrap_or_default()),
+                ..english
+            },
+        }
+    })
+```
+
+The closure gets a `Trouble`: the app's name, the `Cause` (`NoGraphicsDriver`
+or `WindowsOnArm`), the error's `details` and the `help_url`. It returns the
+`Dialog`: `title`, `body`, the `link` the first button opens (`None` for a
+close button only), and `open_label` and `close_label`, which macOS and
+Linux show. Windows' message box shows Yes and No in the system's language,
+so with a link the body should end with the question they answer.
 
 With fastframe-shell, clone the lease into each app creator; only one of them
 takes the app:
@@ -61,7 +104,7 @@ shell.run(|lease| {
 
 ```toml
 [target.'cfg(windows)'.dependencies]
-fastframe-graphics = { git = "https://github.com/crmne/fastframe", tag = "v0.15.0", features = ["wgpu"] }
+fastframe-graphics = { git = "https://github.com/crmne/fastframe", tag = "v0.15.1", features = ["wgpu"] }
 ```
 
 It adds wgpu to the build: about 7 MB on a Windows release binary. On the

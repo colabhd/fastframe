@@ -28,7 +28,7 @@ use std::cell::Cell;
 use std::fmt::Display;
 use std::panic::AssertUnwindSafe;
 use std::rc::Rc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 pub use eframe::Renderer;
 
@@ -43,11 +43,25 @@ pub const RENDERERS: &[Renderer] = &[
 /// The renderer that last opened a window in this process.
 static WORKED: Mutex<Option<Renderer>> = Mutex::new(None);
 
-/// The app's name and help page, for opening its windows.
-#[derive(Clone, Debug)]
+/// An app's own words for the dialog, such as its translations.
+type Words = Arc<dyn Fn(&Trouble<'_>) -> Dialog + Send + Sync>;
+
+/// The app's name, help page and dialog words, for opening its windows.
+#[derive(Clone)]
 pub struct Graphics {
     app_name: String,
     help_url: Option<String>,
+    words: Option<Words>,
+}
+
+impl std::fmt::Debug for Graphics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Graphics")
+            .field("app_name", &self.app_name)
+            .field("help_url", &self.help_url)
+            .field("words", &self.words.as_ref().map(|_| "app's own"))
+            .finish()
+    }
 }
 
 impl Graphics {
@@ -56,6 +70,7 @@ impl Graphics {
         Self {
             app_name: app_name.into(),
             help_url: None,
+            words: None,
         }
     }
 
@@ -63,6 +78,21 @@ impl Graphics {
     #[must_use]
     pub fn help(mut self, url: impl Into<String>) -> Self {
         self.help_url = Some(url.into());
+        self
+    }
+
+    /// The app's own words for the dialog, in place of
+    /// [`Dialog::english`]: a translation, or a different remedy or link.
+    /// `words` gets the [`Trouble`] (the app, the [`Cause`], the error's
+    /// details and the help page) and returns the [`Dialog`] to show. It
+    /// can start from `Dialog::english(trouble)` and change only what it
+    /// needs.
+    #[must_use]
+    pub fn dialog(
+        mut self,
+        words: impl Fn(&Trouble<'_>) -> Dialog + Send + Sync + 'static,
+    ) -> Self {
+        self.words = Some(Arc::new(words));
         self
     }
 
@@ -141,14 +171,148 @@ impl Graphics {
     /// [`Graphics::run_native`] calls this itself. It is public for an app
     /// that opens its window another way.
     pub fn explain(&self, error: &dyn Display) {
-        let message = Message::new(&self.app_name, self.help_url.is_some(), &error.to_string());
-        log::error!("{}: {}", message.title, error);
-        if show(&message)
-            && let Some(url) = &self.help_url
+        let details = error.to_string();
+        let trouble = Trouble {
+            app_name: &self.app_name,
+            cause: Cause::here(),
+            details: details.trim(),
+            help_url: self.help_url.as_deref(),
+        };
+        let dialog = match &self.words {
+            Some(words) => words(&trouble),
+            None => Dialog::english(&trouble),
+        };
+        log::error!("{} ({:?}): {}", dialog.title, trouble.cause, error);
+        if show(&dialog)
+            && let Some(link) = &dialog.link
         {
-            open_url(url);
+            open_url(link);
         }
     }
+}
+
+/// The Microsoft Store page of the OpenCL, OpenGL & Vulkan Compatibility
+/// Pack, which gives Windows on ARM its OpenGL.
+pub const COMPATIBILITY_PACK_PAGE: &str = "ms-windows-store://pdp/?ProductId=9NQPSL29BFFF";
+
+/// Why no renderer could draw the window, which decides the remedy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Cause {
+    /// No graphics driver offers OpenGL 2: the Microsoft Basic Display
+    /// Adapter, a virtual machine or remote session without 3D
+    /// acceleration, or a Linux system without Mesa. The remedy is the
+    /// graphics driver.
+    NoGraphicsDriver,
+    /// Windows on ARM, whatever the app was built for (an x64 build runs
+    /// there emulated). Snapdragon graphics drivers have no OpenGL of their
+    /// own; Windows provides it through Microsoft's OpenCL, OpenGL & Vulkan
+    /// Compatibility Pack, a Store app that translates it to Direct3D 12.
+    /// The remedy is installing or repairing that pack.
+    WindowsOnArm,
+}
+
+impl Cause {
+    /// The cause on this computer.
+    pub fn here() -> Self {
+        Self::for_machine(native_arm64())
+    }
+
+    /// The cause on a computer whose processor is, or is not, ARM64 Windows.
+    pub fn for_machine(windows_on_arm: bool) -> Self {
+        if windows_on_arm {
+            Self::WindowsOnArm
+        } else {
+            Self::NoGraphicsDriver
+        }
+    }
+}
+
+/// What went wrong, for an app's own dialog words ([`Graphics::dialog`]).
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct Trouble<'a> {
+    /// The app's name, as given to [`Graphics::new`].
+    pub app_name: &'a str,
+    /// Why no renderer could draw.
+    pub cause: Cause,
+    /// The last renderer's error, for the person to quote to support.
+    pub details: &'a str,
+    /// The app's help page, as given to [`Graphics::help`].
+    pub help_url: Option<&'a str>,
+}
+
+/// The dialog's words, and the page it offers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Dialog {
+    /// The window's title.
+    pub title: String,
+    /// The explanation. With a `link`, it ends with the question the
+    /// buttons answer: Windows' message box has only Yes and No, in the
+    /// system's language.
+    pub body: String,
+    /// The page the first button opens. `None` shows only a close button.
+    pub link: Option<String>,
+    /// The button that opens the link, where the platform names its
+    /// buttons (macOS and Linux).
+    pub open_label: String,
+    /// The button that closes the dialog, where the platform names it.
+    pub close_label: String,
+}
+
+impl Dialog {
+    /// fastframe's English words. Windows on ARM offers the compatibility
+    /// pack's Store page; anywhere else the app's help page, when it has
+    /// one.
+    pub fn english(trouble: &Trouble<'_>) -> Self {
+        let app = trouble.app_name;
+        let details = trouble.details;
+        let title = format!("{app} cannot open its window");
+        if trouble.cause == Cause::WindowsOnArm {
+            return Self {
+                title,
+                body: format!(
+                    "On Windows on ARM, the OpenGL that {app} draws with comes from Microsoft's OpenCL, OpenGL & Vulkan Compatibility Pack. Install or repair it from the Microsoft Store, then open {app} again.\n\nDetails: {details}\n\nOpen its Microsoft Store page?"
+                ),
+                link: Some(COMPATIBILITY_PACK_PAGE.to_owned()),
+                open_label: "Open Microsoft Store".to_owned(),
+                close_label: "Close".to_owned(),
+            };
+        }
+        let remedy = if cfg!(windows) {
+            format!(
+                "Install your graphics card's driver, from its maker or from Windows Update, then open {app} again. Remote Desktop and virtual machines need 3D acceleration turned on."
+            )
+        } else if cfg!(target_os = "macos") {
+            format!("Update macOS, then open {app} again.")
+        } else {
+            format!(
+                "Install your graphics card's driver or Mesa, then open {app} again. Remote sessions and virtual machines need 3D acceleration turned on."
+            )
+        };
+        let mut body = format!(
+            "{app} needs your graphics driver to draw its window (OpenGL 2 or later), and this computer only has basic graphics.\n\n{remedy}\n\nDetails: {details}"
+        );
+        if trouble.help_url.is_some() {
+            body.push_str("\n\nOpen the help page?");
+        }
+        Self {
+            title,
+            body,
+            link: trouble.help_url.map(str::to_owned),
+            open_label: "Open Help".to_owned(),
+            close_label: "Close".to_owned(),
+        }
+    }
+}
+
+/// Whether Windows runs on an ARM64 processor, asked at run time, so an
+/// x64 build running emulated there counts too.
+fn native_arm64() -> bool {
+    #[cfg(windows)]
+    return windows::native_arm64();
+    #[cfg(not(windows))]
+    false
 }
 
 /// The renderer drawing the window, or that drew the last one, for error
@@ -260,46 +424,8 @@ fn try_renderers<R: Copy + std::fmt::Debug, E: Display>(
     unreachable!("there is always at least one renderer to try")
 }
 
-/// The dialog's words.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Message {
-    title: String,
-    body: String,
-    /// Whether the dialog asks to open the help page (Yes and No) rather
-    /// than only closing (OK).
-    asks_for_help: bool,
-}
-
-impl Message {
-    fn new(app: &str, help: bool, details: &str) -> Self {
-        let remedy = if cfg!(windows) {
-            format!(
-                "Install your graphics card's driver, from its maker or from Windows Update, then open {app} again. Remote Desktop and virtual machines need 3D acceleration turned on."
-            )
-        } else if cfg!(target_os = "macos") {
-            format!("Update macOS, then open {app} again.")
-        } else {
-            format!(
-                "Install your graphics card's driver or Mesa, then open {app} again. Remote sessions and virtual machines need 3D acceleration turned on."
-            )
-        };
-        let mut body = format!(
-            "{app} needs your graphics driver to draw its window (OpenGL 2 or later), and this computer only has basic graphics.\n\n{remedy}\n\nDetails: {}",
-            details.trim()
-        );
-        if help {
-            body.push_str("\n\nOpen the help page?");
-        }
-        Self {
-            title: format!("{app} cannot open its window"),
-            body,
-            asks_for_help: help,
-        }
-    }
-}
-
 /// Shows the dialog and returns whether the person asked for the help page.
-fn show(message: &Message) -> bool {
+fn show(message: &Dialog) -> bool {
     #[cfg(windows)]
     return windows::show(message);
     #[cfg(target_os = "macos")]
@@ -459,24 +585,93 @@ mod tests {
         assert_eq!(RENDERERS.len(), if cfg!(feature = "wgpu") { 2 } else { 1 });
     }
 
+    fn trouble(cause: Cause, help_url: Option<&'static str>) -> Trouble<'static> {
+        Trouble {
+            app_name: "Solco",
+            cause,
+            details: "egui_glow requires opengl 2.0+.",
+            help_url,
+        }
+    }
+
     #[test]
     fn the_message_names_the_app_the_cause_and_the_remedy() {
-        let message = Message::new("Solco", true, "egui_glow requires opengl 2.0+. ");
-        assert_eq!(message.title, "Solco cannot open its window");
-        assert!(message.body.starts_with("Solco needs your graphics driver"));
-        assert!(message.body.contains("OpenGL 2 or later"));
-        assert!(message.body.contains("open Solco again"));
+        let dialog = Dialog::english(&trouble(Cause::NoGraphicsDriver, Some("https://help")));
+        assert_eq!(dialog.title, "Solco cannot open its window");
+        assert!(dialog.body.starts_with("Solco needs your graphics driver"));
+        assert!(dialog.body.contains("OpenGL 2 or later"));
+        assert!(dialog.body.contains("open Solco again"));
         assert!(
-            message
+            dialog
                 .body
                 .contains("Details: egui_glow requires opengl 2.0+.")
         );
-        assert!(message.body.ends_with("Open the help page?"));
-        assert!(message.asks_for_help);
+        assert!(dialog.body.ends_with("Open the help page?"));
+        assert_eq!(dialog.link.as_deref(), Some("https://help"));
 
-        let without_help = Message::new("Solco", false, "x");
+        let without_help = Dialog::english(&trouble(Cause::NoGraphicsDriver, None));
         assert!(!without_help.body.contains("help page"));
-        assert!(!without_help.asks_for_help);
+        assert_eq!(without_help.link, None);
+    }
+
+    /// Snapdragon drivers have no OpenGL: Windows on ARM gets it from
+    /// Microsoft's compatibility pack, so that is the remedy, not a driver
+    /// (Spotifast's dialog, upstreamed).
+    #[test]
+    fn windows_on_arm_points_to_the_compatibility_pack() {
+        assert_eq!(Cause::for_machine(true), Cause::WindowsOnArm);
+        assert_eq!(Cause::for_machine(false), Cause::NoGraphicsDriver);
+        let dialog = Dialog::english(&trouble(Cause::WindowsOnArm, Some("https://help")));
+        assert!(
+            dialog
+                .body
+                .contains("OpenCL, OpenGL & Vulkan Compatibility Pack")
+        );
+        assert!(
+            dialog
+                .body
+                .contains("Details: egui_glow requires opengl 2.0+.")
+        );
+        assert!(dialog.body.ends_with("Open its Microsoft Store page?"));
+        assert!(!dialog.body.contains("graphics card's driver"));
+        assert_eq!(dialog.link.as_deref(), Some(COMPATIBILITY_PACK_PAGE));
+        assert_eq!(dialog.open_label, "Open Microsoft Store");
+    }
+
+    #[test]
+    fn this_computer_is_not_windows_on_arm_unless_it_is_windows() {
+        if !cfg!(windows) {
+            assert_eq!(Cause::here(), Cause::NoGraphicsDriver);
+        }
+    }
+
+    /// An app's own words replace fastframe's, here a translation that keeps
+    /// the built-in link for Windows on ARM.
+    #[test]
+    fn an_app_supplies_its_own_words() {
+        let graphics = Graphics::new("Solco")
+            .help("https://help")
+            .dialog(|trouble| {
+                let english = Dialog::english(trouble);
+                Dialog {
+                    title: format!("{} kann sein Fenster nicht öffnen", trouble.app_name),
+                    body: match trouble.cause {
+                        Cause::WindowsOnArm => "Kompatibilitätspaket installieren?".to_owned(),
+                        _ => "Grafiktreiber installieren?".to_owned(),
+                    },
+                    open_label: "Öffnen".to_owned(),
+                    close_label: "Schließen".to_owned(),
+                    ..english
+                }
+            });
+        let words = graphics.words.as_ref().expect("the app's words");
+        let arm = words(&trouble(Cause::WindowsOnArm, Some("https://help")));
+        assert_eq!(arm.title, "Solco kann sein Fenster nicht öffnen");
+        assert_eq!(arm.link.as_deref(), Some(COMPATIBILITY_PACK_PAGE));
+        let driver = words(&trouble(Cause::NoGraphicsDriver, Some("https://help")));
+        assert_eq!(driver.body, "Grafiktreiber installieren?");
+        assert_eq!(driver.link.as_deref(), Some("https://help"));
+        assert!(format!("{graphics:?}").contains("app's own"));
     }
 
     #[test]

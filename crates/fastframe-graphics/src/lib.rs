@@ -242,6 +242,46 @@ pub struct Trouble<'a> {
     pub help_url: Option<&'a str>,
 }
 
+impl<'a> Trouble<'a> {
+    /// A trouble as [`Graphics::run_native`] would hand it to the app's
+    /// words, so an app can test its [`Graphics::dialog`] closure. The struct
+    /// stays `#[non_exhaustive]`, so later fields arrive without breaking
+    /// this.
+    ///
+    /// ```
+    /// use fastframe_graphics::{COMPATIBILITY_PACK_PAGE, Cause, Dialog, Trouble};
+    ///
+    /// // The app's words, the same function it passes to `Graphics::dialog`.
+    /// fn words(trouble: &Trouble<'_>) -> Dialog {
+    ///     Dialog {
+    ///         title: format!("{} kann sein Fenster nicht öffnen", trouble.app_name),
+    ///         ..Dialog::english(trouble)
+    ///     }
+    /// }
+    ///
+    /// let arm = Trouble::new("Example", Cause::WindowsOnArm, "egui_glow requires opengl 2.0+.", None);
+    /// let dialog = words(&arm);
+    /// assert_eq!(dialog.title, "Example kann sein Fenster nicht öffnen");
+    /// assert_eq!(dialog.link.as_deref(), Some(COMPATIBILITY_PACK_PAGE));
+    ///
+    /// let driver = Trouble::new("Example", Cause::NoGraphicsDriver, "", Some("https://example.com/help"));
+    /// assert_eq!(words(&driver).link.as_deref(), Some("https://example.com/help"));
+    /// ```
+    pub fn new(
+        app_name: &'a str,
+        cause: Cause,
+        details: &'a str,
+        help_url: Option<&'a str>,
+    ) -> Self {
+        Self {
+            app_name,
+            cause,
+            details,
+            help_url,
+        }
+    }
+}
+
 /// The dialog's words, and the page it offers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Dialog {

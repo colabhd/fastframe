@@ -88,6 +88,14 @@ close button only), and `open_label` and `close_label`, which macOS and
 Linux show. Windows' message box shows Yes and No in the system's language,
 so with a link the body should end with the question they answer.
 
+To test the words, keep them in a function and call it with
+`Trouble::new(app_name, cause, details, help_url)` for each `Cause`:
+
+```rust
+let dialog = words(&Trouble::new("Spotifast", Cause::WindowsOnArm, "egui_glow requires opengl 2.0+.", None));
+assert_eq!(dialog.link.as_deref(), Some(fastframe_graphics::COMPATIBILITY_PACK_PAGE));
+```
+
 With fastframe-shell, clone the lease into each app creator; only one of them
 takes the app:
 
@@ -104,7 +112,7 @@ shell.run(|lease| {
 
 ```toml
 [target.'cfg(windows)'.dependencies]
-fastframe-graphics = { git = "https://github.com/crmne/fastframe", tag = "v0.15.1", features = ["wgpu"] }
+fastframe-graphics = { git = "https://github.com/crmne/fastframe", tag = "v0.15.2", features = ["wgpu"] }
 ```
 
 It adds wgpu to the build: about 7 MB on a Windows release binary. On the

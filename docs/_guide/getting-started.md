@@ -16,8 +16,8 @@ fastframe is not on crates.io. Depend on a release tag from GitHub:
 
 ```toml
 [dependencies]
-fastframe-text = { git = "https://github.com/crmne/fastframe", tag = "v0.15.1" }
-fastframe-fonts = { git = "https://github.com/crmne/fastframe", tag = "v0.15.1" }
+fastframe-text = { git = "https://github.com/crmne/fastframe", tag = "v0.15.2" }
+fastframe-fonts = { git = "https://github.com/crmne/fastframe", tag = "v0.15.2" }
 ```
 
 Use the same tag for every fastframe crate, and move it deliberately: the
